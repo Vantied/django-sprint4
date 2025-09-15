@@ -14,7 +14,7 @@ def custom_404(request, exception):
     return render(request, 'pages/404.html', status=404)
 
 
-def custom_403(request, reason=''):
+def custom_403(request, exception):
     return render(request, 'pages/403csrf.html', status=403)
 
 

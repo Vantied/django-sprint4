@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Category, Post, Location
+from .models import Category, Post, Location, Comment
 
 admin.site.empty_value_display = 'Не задано'
 
@@ -27,6 +27,7 @@ class PostAdmin(admin.ModelAdmin):
     autocomplete_fields = ('author', 'category', 'location')
 
 
+admin.site.register(Comment)
 admin.site.register(Category, CategoryAdmin)
 admin.site.register(Location, LocationAdmin)
 admin.site.register(Post, PostAdmin)

@@ -134,7 +134,13 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Перенавправление писем.
 EMAIL_BACKEND = 'django.core.mail.backends.filebased.EmailBackend'
 # Директория для хранение писем.
-EMAIL_FILE_PATH = BASE_DIR / 'sent_mail'
+EMAIL_FILE_PATH = BASE_DIR / 'sent_emails'
+# Перенаправление после выхода.
+LOGOUT_REDIRECT_URL = 'blog:index'
+# Перенапрваление после входа.
+LOGIN_REDIRECT_URL = 'blog:index'
+
+LOGIN_URL = '/auth/login/'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
