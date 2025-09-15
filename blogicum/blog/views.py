@@ -31,7 +31,6 @@ class IndexListView(ListView):
     model = Post
     template_name = 'blog/index.html'
     paginate_by = QUANTITY_ON_MAIN
-    context_object_name = 'page_obj'
 
     def get_queryset(self):
         # Главная страница показывает только опубликованные посты
@@ -115,7 +114,6 @@ class CategoryPostsListView(ListView):
     model = Post
     template_name = 'blog/category.html'
     paginate_by = QUANTITY_ON_MAIN
-    context_object_name = 'page_obj'
 
     def get_queryset(self):
         category = get_object_or_404(Category, slug=self.kwargs['category_slug'], is_published=True)
