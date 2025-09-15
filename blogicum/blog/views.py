@@ -9,57 +9,89 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.core.paginator import Paginator
+
 from blog.models import Post, Category, Comment
 from .forms import CommentForm, PostForm
-from core.constants import QUANTITY_ON_MAIN
+from core.constants import QUANTITY_ON_PAGE
 
 User = get_user_model()
 
 
-# ===== Вспомогательная функция =====
-def published(manager):
-    """Возвращает только опубликованные посты, не отложенные и с опубликованной категорией."""
-    return manager.filter(
-        pub_date__lte=Now(),
-        is_published=True,
-        category__is_published=True,
-    )
+# ===== Миксины =====
+class PublishedPostsMixin:
+    """Миксин для получения только опубликованных постов."""
+
+    def get_published_queryset(self, manager):
+        return manager.filter(
+            pub_date__lte=Now(),
+            is_published=True,
+            category__is_published=True,
+        ).annotate(comment_count=Count('comments')).order_by('-pub_date')
+
+
+class OwnerOrPublishedMixin(PublishedPostsMixin):
+    """Миксин для проверки авторства или получения опубликованных постов."""
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.user.is_authenticated:
+            # Автор видит свои посты + опубликованные чужие
+            return queryset.filter(
+                Q(author=self.request.user)
+                | Q(is_published=True, category__is_published=True,
+                    pub_date__lte=Now())
+            )
+        # Неавторизованные пользователи видят только опубликованные посты
+        return self.get_published_queryset(queryset)
+
+
+class OwnerRequiredMixin:
+    """Миксин для проверки, что пользователь является автором объекта."""
+
+    def dispatch(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if not request.user.is_authenticated or obj.author != request.user:
+            return redirect(
+                'blog:post_detail',
+                post_id=obj.post_id if hasattr(obj, 'post_id') else obj.id
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class SuperuserOrOwnerRequiredMixin:
+    """
+    Миксин для проверки, что пользователь является
+    автором или суперпользователем.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if not request.user.is_authenticated or (
+            obj.author != request.user and not request.user.is_superuser
+        ):
+            return redirect('blog:post_detail', post_id=obj.post_id)
+        return super().dispatch(request, *args, **kwargs)
 
 
 # ===== Главная страница =====
-class IndexListView(ListView):
+class IndexListView(PublishedPostsMixin, ListView):
     model = Post
     template_name = 'blog/index.html'
-    paginate_by = QUANTITY_ON_MAIN
+    paginate_by = QUANTITY_ON_PAGE
 
     def get_queryset(self):
-        # Главная страница показывает только опубликованные посты
-        return published(Post.objects).annotate(comment_count=Count('comments')).order_by('-pub_date')
+        return self.get_published_queryset(Post.objects)
 
 
 # ===== Просмотр поста =====
-class PostDetailView(DetailView):
+class PostDetailView(OwnerOrPublishedMixin, DetailView):
     model = Post
     template_name = 'blog/detail.html'
     pk_url_kwarg = 'post_id'
 
-    def get_queryset(self):
-        queryset = Post.objects.all()
-        if self.request.user.is_authenticated:
-            # Автор видит все свои посты + опубликованные чужие
-            queryset = queryset.filter(
-                Q(author=self.request.user) |
-                Q(is_published=True, category__is_published=True, pub_date__lte=Now())
-            )
-        else:
-            queryset = published(queryset)
-        return queryset
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # Добавляем форму для комментариев
         context['form'] = CommentForm()
-        # Добавляем комментарии к посту
         context['comments'] = self.object.comments.all().order_by('created_at')
         return context
 
@@ -75,49 +107,42 @@ class PostCreateView(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
     def get_success_url(self):
-        return reverse_lazy('blog:profile', kwargs={'username': self.request.user.username})
+        return reverse_lazy('blog:profile', kwargs={
+            'username': self.request.user.username
+        })
 
 
 # ===== Редактирование поста =====
-class PostUpdateView(UpdateView):
+class PostUpdateView(OwnerRequiredMixin, UpdateView):
     model = Post
     form_class = PostForm
     template_name = 'blog/create.html'
     pk_url_kwarg = 'post_id'
 
-    def dispatch(self, request, *args, **kwargs):
-        post = self.get_object()
-        if not request.user.is_authenticated or post.author != request.user:
-            return redirect('blog:post_detail', post_id=post.id)
-        return super().dispatch(request, *args, **kwargs)
-
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={'post_id': self.object.id})
+        return reverse_lazy('blog:post_detail', kwargs={
+            'post_id': self.object.id
+        })
 
 
 # ===== Удаление поста =====
-class PostDeleteView(DeleteView):
+class PostDeleteView(OwnerRequiredMixin, DeleteView):
     model = Post
     template_name = 'blog/create.html'
     pk_url_kwarg = 'post_id'
     success_url = reverse_lazy('blog:index')
 
-    def dispatch(self, request, *args, **kwargs):
-        post = self.get_object()
-        if not request.user.is_authenticated or post.author != request.user:
-            return redirect('blog:post_detail', post_id=post.id)
-        return super().dispatch(request, *args, **kwargs)
-
 
 # ===== Страница категории =====
-class CategoryPostsListView(ListView):
+class CategoryPostsListView(PublishedPostsMixin, ListView):
     model = Post
     template_name = 'blog/category.html'
-    paginate_by = QUANTITY_ON_MAIN
+    paginate_by = QUANTITY_ON_PAGE
 
     def get_queryset(self):
-        category = get_object_or_404(Category, slug=self.kwargs['category_slug'], is_published=True)
-        return published(category.posts).annotate(comment_count=Count('comments')).order_by('-pub_date')
+        category = get_object_or_404(
+            Category, slug=self.kwargs['category_slug'], is_published=True)
+        return self.get_published_queryset(category.posts)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -134,27 +159,25 @@ class ProfileDetailView(DetailView):
     context_object_name = 'profile'
     slug_field = 'username'
     slug_url_kwarg = 'username'
-    paginate_by = 10  # Устанавливаем 10 постов на страницу
+    paginate_by = QUANTITY_ON_PAGE
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         profile_user = self.get_object()
 
         # Выбираем посты с аннотацией количества комментариев
-        if self.request.user == profile_user:
-            posts = Post.objects.filter(author=profile_user).annotate(comment_count=Count('comments'))
-        else:
-            posts = published(Post.objects.filter(author=profile_user)).annotate(comment_count=Count('comments'))
+        posts = Post.objects.filter(author=profile_user)
+        if self.request.user != profile_user:
+            posts = PublishedPostsMixin().get_published_queryset(posts)
 
-        # Сортировка по убыванию даты публикации
-        posts = posts.order_by('-pub_date')
+        posts = posts.annotate(comment_count=Count(
+            'comments')).order_by('-pub_date')
 
         # Пагинация
         paginator = Paginator(posts, self.paginate_by)
         page_number = self.request.GET.get('page')
         page_obj = paginator.get_page(page_number)
 
-        # Передаем посты и объект пагинации в контекст
         context['page_obj'] = page_obj
         return context
 
@@ -171,7 +194,9 @@ class UserUpdateView(LoginRequiredMixin, UpdateView):
         return self.request.user
 
     def get_success_url(self):
-        return reverse_lazy('blog:profile', kwargs={'username': self.request.user.username})
+        return reverse_lazy('blog:profile', kwargs={
+            'username': self.request.user.username
+        })
 
 
 # ===== Добавление комментария =====
@@ -185,7 +210,6 @@ def add_comment(request, post_id):
         comment.post = post
         comment.save()
         return redirect('blog:post_detail', post_id=post_id)
-    # Если форма невалидна или это GET-запрос, рендерим страницу поста
     return render(request, 'blog/detail.html', {
         'post': post,
         'form': form,
@@ -194,39 +218,32 @@ def add_comment(request, post_id):
 
 
 # ===== Редактирование комментария =====
-class CommentUpdateView(UpdateView):
+class CommentUpdateView(OwnerRequiredMixin, UpdateView):
     model = Comment
     form_class = CommentForm
     template_name = 'blog/comment.html'
     pk_url_kwarg = 'comment_id'
 
-    def dispatch(self, request, *args, **kwargs):
-        comment = self.get_object()
-        if not request.user.is_authenticated or comment.author != request.user:
-            return redirect('blog:post_detail', post_id=comment.post_id)
-        return super().dispatch(request, *args, **kwargs)
-
     def get_object(self, queryset=None):
-        return get_object_or_404(Comment, id=self.kwargs['comment_id'], post_id=self.kwargs['post_id'])
+        return get_object_or_404(Comment, id=self.kwargs['comment_id'],
+                                 post_id=self.kwargs['post_id'])
 
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={'post_id': self.object.post_id})
+        return reverse_lazy('blog:post_detail', kwargs={
+            'post_id': self.object.post_id
+        })
 
 
 # ===== Удаление комментария =====
-class CommentDeleteView(DeleteView):
+class CommentDeleteView(SuperuserOrOwnerRequiredMixin, DeleteView):
     model = Comment
     template_name = 'blog/comment.html'
     pk_url_kwarg = 'comment_id'
 
-    def dispatch(self, request, *args, **kwargs):
-        comment = self.get_object()
-        if not request.user.is_authenticated or (comment.author != request.user and not request.user.is_superuser):
-            return redirect('blog:post_detail', post_id=comment.post_id)
-        return super().dispatch(request, *args, **kwargs)
-
     def get_object(self, queryset=None):
-        return get_object_or_404(Comment, id=self.kwargs['comment_id'], post_id=self.kwargs['post_id'])
+        return get_object_or_404(Comment, id=self.kwargs['comment_id'],
+                                 post_id=self.kwargs['post_id'])
 
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={'post_id': self.object.post_id})
+        return reverse_lazy('blog:post_detail',
+                            kwargs={'post_id': self.object.post_id})

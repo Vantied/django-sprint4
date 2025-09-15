@@ -4,20 +4,15 @@ from django.conf import settings
 from django.contrib.auth.forms import UserCreationForm
 from django.views.generic.edit import CreateView
 from django.conf.urls.static import static
-from django.contrib.auth.views import LogoutView
 
-class CustomLogoutView(LogoutView):
-    http_method_names = ["get", "post", "options"]
-
-    def get(self, request, *args, **kwargs):
-        return super().post(request, *args, **kwargs)
+from core.views import LogoutView
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('blog.urls')),
     path('pages/', include('pages.urls')),
-    path("auth/logout/", CustomLogoutView.as_view(), name="logout"),
+    path("auth/logout/", LogoutView.as_view(), name="logout"),
     path('auth/', include('django.contrib.auth.urls')),  # Для авторизации
     path(
         'auth/registration/',
