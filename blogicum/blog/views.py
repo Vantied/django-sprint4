@@ -7,7 +7,6 @@ from django.views.generic import (
 )
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
 from django.core.paginator import Paginator
 
 from blog.models import Post, Category, Comment
