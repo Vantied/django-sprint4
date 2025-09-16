@@ -1,7 +1,7 @@
 from django.contrib.auth.views import LogoutView
 
 
-class CustomLogoutView(LogoutView):
+class LogoutView(LogoutView):
     http_method_names = ["get", "post", "options"]
 
     def get(self, request, *args, **kwargs):

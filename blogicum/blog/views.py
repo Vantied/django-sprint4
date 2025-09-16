@@ -34,15 +34,15 @@ class OwnerOrPublishedMixin(PublishedPostsMixin):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if self.request.user.is_authenticated:
-            # Автор видит свои посты + опубликованные чужие
-            return queryset.filter(
-                Q(author=self.request.user)
-                | Q(is_published=True, category__is_published=True,
-                    pub_date__lte=Now())
-            )
-        # Неавторизованные пользователи видят только опубликованные посты
-        return self.get_published_queryset(queryset)
+        published_qs = self.get_published_queryset(queryset)
+
+        # Получаем id пользователя
+        user_id = getattr(self.request.user, "id", None)
+
+        if user_id:
+            return published_qs | queryset.filter(author_id=user_id)
+
+        return published_qs
 
 
 class OwnerRequiredMixin:
@@ -58,19 +58,22 @@ class OwnerRequiredMixin:
         return super().dispatch(request, *args, **kwargs)
 
 
-class SuperuserOrOwnerRequiredMixin:
-    """
-    Миксин для проверки, что пользователь является
-    автором или суперпользователем.
-    """
+class CommentObjectMixin:
+    """Миксин для получения комментария и формирования success_url."""
 
-    def dispatch(self, request, *args, **kwargs):
-        obj = self.get_object()
-        if not request.user.is_authenticated or (
-            obj.author != request.user and not request.user.is_superuser
-        ):
-            return redirect('blog:post_detail', post_id=obj.post_id)
-        return super().dispatch(request, *args, **kwargs)
+    model = Comment
+    pk_url_kwarg = 'comment_id'
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(
+            Comment,
+            id=self.kwargs['comment_id'],
+            post_id=self.kwargs['post_id']
+        )
+
+    def get_success_url(self):
+        return reverse_lazy('blog:post_detail', kwargs={
+            'post_id': self.object.post_id})
 
 
 # ===== Главная страница =====
@@ -140,26 +143,32 @@ class CategoryPostsListView(PublishedPostsMixin, ListView):
     paginate_by = QUANTITY_ON_PAGE
 
     def get_queryset(self):
-        category = get_object_or_404(
-            Category, slug=self.kwargs['category_slug'], is_published=True)
+        category = self.get_category()
         return self.get_published_queryset(category.posts)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['category'] = get_object_or_404(
-            Category, slug=self.kwargs['category_slug'], is_published=True
-        )
+        context['category'] = self.get_category()
         return context
+
+    def get_category(self):
+        return get_object_or_404(
+            Category,
+            slug=self.kwargs['category_slug'],
+            is_published=True
+        )
 
 
 # ===== Профиль пользователя =====
 class ProfileDetailView(DetailView):
-    model = User
     template_name = 'blog/profile.html'
     context_object_name = 'profile'
     slug_field = 'username'
     slug_url_kwarg = 'username'
     paginate_by = QUANTITY_ON_PAGE
+
+    def get_queryset(self):
+        return User.objects.all()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -218,32 +227,20 @@ def add_comment(request, post_id):
 
 
 # ===== Редактирование комментария =====
-class CommentUpdateView(OwnerRequiredMixin, UpdateView):
-    model = Comment
+class CommentUpdateView(CommentObjectMixin, OwnerRequiredMixin, UpdateView):
     form_class = CommentForm
     template_name = 'blog/comment.html'
-    pk_url_kwarg = 'comment_id'
-
-    def get_object(self, queryset=None):
-        return get_object_or_404(Comment, id=self.kwargs['comment_id'],
-                                 post_id=self.kwargs['post_id'])
-
-    def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={
-            'post_id': self.object.post_id
-        })
 
 
 # ===== Удаление комментария =====
-class CommentDeleteView(SuperuserOrOwnerRequiredMixin, DeleteView):
-    model = Comment
+class CommentDeleteView(CommentObjectMixin, DeleteView):
     template_name = 'blog/comment.html'
-    pk_url_kwarg = 'comment_id'
 
-    def get_object(self, queryset=None):
-        return get_object_or_404(Comment, id=self.kwargs['comment_id'],
-                                 post_id=self.kwargs['post_id'])
-
-    def get_success_url(self):
-        return reverse_lazy('blog:post_detail',
-                            kwargs={'post_id': self.object.post_id})
+    # Удалять комментраий может только его автор или администратор
+    def dispatch(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if not request.user.is_authenticated or (
+            obj.author != request.user and not request.user.is_superuser
+        ):
+            return redirect('blog:post_detail', post_id=obj.post_id)
+        return super().dispatch(request, *args, **kwargs)
