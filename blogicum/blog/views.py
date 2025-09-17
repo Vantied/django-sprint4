@@ -1,14 +1,13 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse_lazy
-from django.db.models.functions import Now
 from django.contrib.auth.decorators import login_required
 from django.views.generic import (
     ListView, DetailView, UpdateView, DeleteView, CreateView
 )
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth import get_user_model
-from django.db.models import Count
-from django.core.paginator import Paginator
+from django.db.models import Count, Q
+from django.utils import timezone
 
 from blog.models import Post, Category, Comment
 from .forms import CommentForm, PostForm
@@ -23,7 +22,7 @@ class PublishedPostsMixin:
 
     def get_published_queryset(self, manager):
         return manager.filter(
-            pub_date__lte=Now(),
+            pub_date__lte=timezone.now(),
             is_published=True,
             category__is_published=True,
         ).annotate(comment_count=Count('comments')).order_by('-pub_date')
@@ -34,15 +33,14 @@ class OwnerOrPublishedMixin(PublishedPostsMixin):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        published_qs = self.get_published_queryset(queryset)
 
-        # Получаем id пользователя
-        user_id = getattr(self.request.user, "id", None)
-
-        if user_id:
-            return published_qs | queryset.filter(author_id=user_id)
-
-        return published_qs
+        return queryset.filter(
+            Q(author_id=self.request.user.id) | Q(
+                is_published=True,
+                category__is_published=True,
+                pub_date__lte=timezone.now()
+            )
+        )
 
 
 class OwnerRequiredMixin:
@@ -160,34 +158,34 @@ class CategoryPostsListView(PublishedPostsMixin, ListView):
 
 
 # ===== Профиль пользователя =====
-class ProfileDetailView(DetailView):
+class ProfileListView(PublishedPostsMixin, ListView):
+    """Страница профиля пользователя со списком его постов."""
+
+    model = Post
     template_name = 'blog/profile.html'
-    context_object_name = 'profile'
     slug_field = 'username'
     slug_url_kwarg = 'username'
     paginate_by = QUANTITY_ON_PAGE
 
+    def get_profile_user(self):
+        return get_object_or_404(
+            User,
+            username=self.kwargs['username']
+        )
+
     def get_queryset(self):
-        return User.objects.all()
+        profile_user = self.get_profile_user()
+        queryset = (
+            Post.objects.filter(author=profile_user)
+            .annotate(comment_count=Count('comments'))
+            .order_by('-pub_date')
+        )
+        return queryset
 
     def get_context_data(self, **kwargs):
+        """Добавляем в контекст объект пользователя профиля."""
         context = super().get_context_data(**kwargs)
-        profile_user = self.get_object()
-
-        # Выбираем посты с аннотацией количества комментариев
-        posts = Post.objects.filter(author=profile_user)
-        if self.request.user != profile_user:
-            posts = PublishedPostsMixin().get_published_queryset(posts)
-
-        posts = posts.annotate(comment_count=Count(
-            'comments')).order_by('-pub_date')
-
-        # Пагинация
-        paginator = Paginator(posts, self.paginate_by)
-        page_number = self.request.GET.get('page')
-        page_obj = paginator.get_page(page_number)
-
-        context['page_obj'] = page_obj
+        context['profile'] = self.get_profile_user()
         return context
 
 
@@ -233,14 +231,5 @@ class CommentUpdateView(CommentObjectMixin, OwnerRequiredMixin, UpdateView):
 
 
 # ===== Удаление комментария =====
-class CommentDeleteView(CommentObjectMixin, DeleteView):
+class CommentDeleteView(OwnerRequiredMixin, CommentObjectMixin, DeleteView):
     template_name = 'blog/comment.html'
-
-    # Удалять комментраий может только его автор или администратор
-    def dispatch(self, request, *args, **kwargs):
-        obj = self.get_object()
-        if not request.user.is_authenticated or (
-            obj.author != request.user and not request.user.is_superuser
-        ):
-            return redirect('blog:post_detail', post_id=obj.post_id)
-        return super().dispatch(request, *args, **kwargs)
