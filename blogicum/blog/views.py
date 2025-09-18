@@ -163,8 +163,6 @@ class ProfileListView(PublishedPostsMixin, ListView):
 
     model = Post
     template_name = 'blog/profile.html'
-    slug_field = 'username'
-    slug_url_kwarg = 'username'
     paginate_by = QUANTITY_ON_PAGE
 
     def get_profile_user(self):
